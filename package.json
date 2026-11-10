@@ -1,0 +1,26 @@
+{
+  "name": "ip-monitor",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Floating desktop card for the current public IP information",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@lucide/vue": "^1.70.0",
+    "@tauri-apps/api": "^2.12.4",
+    "flag-icons": "^7.6.0",
+    "vue": "^3.5.45"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.8",
+    "vue-tsc": "^3.3.14"
+  }
+}

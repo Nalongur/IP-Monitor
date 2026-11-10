@@ -1,0 +1,13 @@
+node_modules
+dist
+dist-ssr
+*.local
+.DS_Store
+Thumbs.db
+
+# Rust / Tauri
+src-tauri/target
+src-tauri/gen
+
+# Local scratch (preview mockups)
+.preview/

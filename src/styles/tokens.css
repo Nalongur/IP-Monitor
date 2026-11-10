@@ -1,0 +1,138 @@
+/* ============================================================
+   IP Monitor — design tokens (spec §2.1)
+   The documented palette is the starting point. Phase 5 may
+   calibrate a few values against real Windows acrylic + DPI,
+   but every UI surface must read from these variables.
+   ============================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Ink -------------------------------------------------- */
+  --ip-text: #242522;
+  --ip-text-secondary: #777972;
+  --ip-text-tertiary: #6b6d65;
+  --ip-ink-on-accent: #23270d;
+  --ip-ink-on-dark: #f4f7e7;
+
+  /* ---- Accent ----------------------------------------------- */
+  --ip-accent: #d8ff35;
+  --ip-accent-strong: #c9f31a;
+  --ip-accent-soft: rgba(216, 255, 53, 0.36);
+  --ip-accent-tint: rgba(216, 255, 53, 0.18);
+  --ip-accent-line: rgba(164, 192, 22, 0.55);
+  --ip-accent-ink: #5f7511;
+  /* Warm glow in the card's top-right corner (acrylic.css). */
+  --ip-glow: rgba(216, 255, 53, 0.24);
+  --ip-glow-fade: rgba(216, 255, 53, 0);
+
+  /* ---- Status (spec §8.2) ----------------------------------- */
+  --ip-status-idle: #9b9d95;
+  --ip-status-checking: #c08a2e;
+  --ip-status-connected: #9dbb14;
+  --ip-status-partial: #c08a2e;
+  --ip-status-error: #b4462f;
+  --ip-status-stale: #8d8f86;
+
+  /* ---- Surfaces --------------------------------------------- */
+  /* The window itself is see-through (no compositor material, see lib.rs), so
+     this fill is what keeps text readable over whatever is behind the card.
+     0.94 lets a faint ghost of the desktop through without hurting contrast. */
+  --ip-surface: rgba(248, 248, 242, 0.97);
+  --ip-surface-menu: rgba(250, 250, 245, 0.97);
+  --ip-surface-raised: rgba(255, 255, 255, 0.52);
+  --ip-surface-raised-hover: rgba(255, 255, 255, 0.76);
+  --ip-divider: rgba(60, 60, 55, 0.1);
+  --ip-hover: rgba(60, 60, 55, 0.06);
+  --ip-pressed: rgba(60, 60, 55, 0.1);
+  --ip-focus: rgba(86, 102, 15, 0.62);
+
+  /* ---- Radii (spec §2.1: card 28-36, buttons 14-18) ---------- */
+  --ip-radius-card: 28px;
+  --ip-radius-menu: 20px;
+  --ip-radius-button: 16px;
+  --ip-radius-item: 12px;
+  --ip-radius-pill: 999px;
+
+  /* ---- Spacing ---------------------------------------------- */
+  --ip-gutter: 34px;
+  --ip-gap-xs: 6px;
+  --ip-gap-sm: 10px;
+  --ip-gap-md: 16px;
+  --ip-gap-lg: 26px;
+  --ip-gap-xl: 30px;
+
+  /* ---- Type ------------------------------------------------- */
+  --ip-font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --ip-font-display: "Segoe UI Variable Display", "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  --ip-font-mono: "Cascadia Mono", Consolas, ui-monospace, "SFMono-Regular", monospace;
+
+  /* ---- Elevation -------------------------------------------- */
+  --ip-shadow-card: 0 0 0 1px rgba(60, 60, 55, 0.07), 0 12px 30px -16px rgba(31, 34, 23, 0.5), 0 3px 10px -6px rgba(31, 34, 23, 0.22);
+  --ip-shadow-menu: 0 0 0 1px rgba(60, 60, 55, 0.08), 0 18px 36px -16px rgba(31, 34, 23, 0.42), 0 4px 10px -4px rgba(31, 34, 23, 0.16);
+  --ip-shadow-raised: 0 1px 2px rgba(31, 34, 23, 0.06);
+  --ip-highlight-edge: linear-gradient(
+    155deg,
+    rgba(255, 255, 255, 0.98) 0%,
+    rgba(255, 255, 255, 0.35) 22%,
+    rgba(255, 255, 255, 0.05) 48%,
+    rgba(255, 255, 255, 0.28) 78%,
+    rgba(255, 255, 255, 0.72) 100%
+  );
+
+  /* ---- Motion ----------------------------------------------- */
+  --ip-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ip-duration-fast: 120ms;
+  --ip-duration: 170ms;
+}
+
+/* ============================================================
+   Accent themes — the user picks one from the ellipsis popover.
+   Only the accent family moves: status colours (amber / red /
+   green) keep their meaning regardless of decoration.
+   ============================================================ */
+
+:root[data-theme='aqua'] {
+  --ip-accent: #3fe6f0;
+  --ip-accent-strong: #23d3e1;
+  --ip-accent-soft: rgba(63, 230, 240, 0.34);
+  --ip-accent-tint: rgba(63, 230, 240, 0.18);
+  --ip-accent-line: rgba(28, 176, 190, 0.55);
+  --ip-accent-ink: #0f5f66;
+  --ip-glow: rgba(63, 230, 240, 0.22);
+  --ip-glow-fade: rgba(63, 230, 240, 0);
+}
+
+:root[data-theme='violet'] {
+  --ip-accent: #b08cff;
+  --ip-accent-strong: #9a6ff5;
+  --ip-accent-soft: rgba(176, 140, 255, 0.34);
+  --ip-accent-tint: rgba(176, 140, 255, 0.18);
+  --ip-accent-line: rgba(138, 102, 219, 0.55);
+  --ip-accent-ink: #513585;
+  --ip-glow: rgba(176, 140, 255, 0.22);
+  --ip-glow-fade: rgba(176, 140, 255, 0);
+}
+
+/* ============================================================
+   Resizable card. The window is the card, so viewport queries
+   are exactly window queries — no container queries needed.
+   Below 700px the 34px gutter starts eating the address.
+
+   The corner radius stays put across widths on purpose: the
+   window is rounded by DWM at a fixed system radius, and any
+   CSS radius larger than that leaves a sliver of bare material
+   in the corners. See `round_window` in lib.rs.
+   ============================================================ */
+
+@media (max-width: 700px) {
+  :root {
+    --ip-gutter: 28px;
+  }
+}
+
+@media (max-width: 600px) {
+  :root {
+    --ip-gutter: 18px;
+  }
+}

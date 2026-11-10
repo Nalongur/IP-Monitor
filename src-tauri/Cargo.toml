@@ -1,0 +1,38 @@
+[package]
+name = "ip-monitor"
+version = "0.1.0"
+description = "Floating desktop card for the current public IP information"
+authors = ["IP Monitor"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "ip_monitor_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-autostart = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+reqwest = { version = "0.12", features = ["json", "socks"] }
+tauri-plugin-single-instance = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Real background blur through the DWM system backdrop. The CSS surface stays
+# as the fallback: an unavailable backdrop must never block the window.
+window-vibrancy = "0.8"
+# Reading the Windows proxy configuration has to go through the documented
+# WinHTTP call, not through environment variables (spec §6.2).
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Networking_WinHttp",
+    # DPAPI: the custom proxy password is stored encrypted with the user's
+    # logon credentials, never in clear text (spec §10.2).
+    "Win32_Security_Cryptography",
+] }
