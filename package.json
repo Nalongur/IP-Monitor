@@ -1,7 +1,7 @@
 {
   "name": "ip-monitor",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Floating desktop card for the current public IP information",
   "scripts": {

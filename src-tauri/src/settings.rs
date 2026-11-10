@@ -45,6 +45,9 @@ pub struct Settings {
     /// Last window size in logical pixels, so the card reopens at the size the
     /// user chose instead of snapping back to the default every launch.
     pub window_size: Option<WindowSize>,
+    /// Present only when the last successfully displayed window was folded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dock: Option<crate::edge::Dock>,
 }
 
 /// Physical top-left corner of the card.
@@ -73,6 +76,7 @@ impl Default for Settings {
             custom_proxy: None,
             window_position: None,
             window_size: None,
+            dock: None,
         }
     }
 }
@@ -168,9 +172,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn folded_state_round_trips_without_losing_expanded_size() {
+        let mut settings = Settings::default();
+        settings.window_size = Some(WindowSize { width: 471, height: 323 });
+        settings.dock = Some(crate::edge::Dock {
+            side: crate::edge::Side::Top,
+            display: crate::edge::Rect { x: -1920, y: 0, width: 1920, height: 1080 },
+            fraction: 0.75,
+        });
+
+        let restored: Settings = serde_json::from_slice(&serde_json::to_vec(&settings).unwrap()).unwrap();
+        let dock = restored.dock.unwrap();
+        assert_eq!(dock.side, crate::edge::Side::Top);
+        assert_eq!(dock.display.x, -1920);
+        assert_eq!(dock.fraction, 0.75);
+        let size = restored.window_size.unwrap();
+        assert_eq!((size.width, size.height), (471, 323));
+    }
+
+    #[test]
     fn legacy_settings_default_to_unlocked_and_lock_round_trips() {
         let mut settings: Settings = serde_json::from_str(r#"{"pinned":false}"#).unwrap();
         assert!(!settings.size_locked);
+        assert!(settings.dock.is_none());
         assert!(!settings.pinned);
         settings.size_locked = true;
         let saved = serde_json::to_string(&settings).unwrap();

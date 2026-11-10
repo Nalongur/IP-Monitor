@@ -44,6 +44,10 @@ export function useEdgeMode() {
     await invoke('move_edge_tab', { revision: tab.revision, center: tab.center, delta })
   }
 
+  async function saveTab(tab: EdgeSnapshot): Promise<void> {
+    await invoke('save_edge_tab', { revision: tab.revision })
+  }
+
   onMounted(async () => {
     if (!isTauri()) return
     try {
@@ -69,5 +73,5 @@ export function useEdgeMode() {
     unlisten?.()
   })
 
-  return { parked, side, expand, readTab, moveTab }
+  return { parked, side, expand, readTab, moveTab, saveTab }
 }

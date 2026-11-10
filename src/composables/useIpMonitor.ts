@@ -8,7 +8,7 @@
  *
  * No Pinia: the card is the only reader, so a composable ref set is enough.
  */
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { flagUrl, placeText } from '../lib/flags'
 import type {
@@ -184,10 +184,25 @@ export function useIpMonitor(call: typeof invoke = invoke) {
     return stamp ? `${reason} · ${stamp}` : reason
   })
 
+  let requestsInFlight = 0
+  let autoRefreshTimer: ReturnType<typeof setInterval> | undefined
+
+  function startAutoRefresh(): void {
+    if (autoRefreshTimer !== undefined) return
+    autoRefreshTimer = setInterval(() => {
+      if (!isLoading.value && requestsInFlight === 0) void refresh()
+    }, 120_000)
+  }
+
+  onScopeDispose(() => {
+    if (autoRefreshTimer !== undefined) clearInterval(autoRefreshTimer)
+  })
+
   async function refresh(): Promise<void> {
     const currentRun = ++runId
     isLoading.value = true
     error.value = null
+    requestsInFlight += 1
 
     try {
       const next = await call<DetectionResult>('get_ip_info', { mode: mode.value })
@@ -210,6 +225,7 @@ export function useIpMonitor(call: typeof invoke = invoke) {
       // blank card (spec §8.2 Stale).
       error.value = describeError(failure)
     } finally {
+      requestsInFlight -= 1
       if (currentRun === runId) isLoading.value = false
     }
   }
@@ -300,6 +316,7 @@ export function useIpMonitor(call: typeof invoke = invoke) {
     canCopy,
     routeLabel,
     refresh,
+    startAutoRefresh,
     copySnapshot,
     selectMode,
     toggleModeMenu,

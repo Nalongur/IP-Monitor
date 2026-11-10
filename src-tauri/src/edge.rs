@@ -5,12 +5,12 @@
 //! size and position it had. The geometry lives here as plain integers so it can
 //! be reasoned about (and tested) without a window.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// Which monitor edge the tab is parked on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Side {
     Left,
@@ -34,6 +34,54 @@ pub struct Parked {
     pub tab: Rect,
     pub width: u32,
     pub height: u32,
+}
+
+/// A position along a specific display edge. Use a fraction of the usable
+/// edge so DPI or taskbar changes keep the icon near its old resting point.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Dock {
+    pub side: Side,
+    pub display: Rect,
+    pub fraction: f64,
+}
+
+impl Dock {
+    pub fn from_tab(side: Side, tab: Rect, display: Rect, work: Rect) -> Self {
+        let (start, length) = along_axis(side, work);
+        let fraction = (f64::from(along_center(side, tab)) - f64::from(start))
+            / f64::from(length.max(1));
+        Self { side, display, fraction: fraction.clamp(0.0, 1.0) }
+    }
+
+    pub fn restore(self, display: Rect, work: Rect, scale: f64) -> Option<Rect> {
+        let size = (TAB_SIZE * scale).round() as i32;
+        if self.display != display || size <= 0 || size > work.width || size > work.height {
+            return None;
+        }
+        let (start, length) = along_axis(self.side, work);
+        let center = start + (f64::from(length) * self.fraction.clamp(0.0, 1.0)).round() as i32;
+        Some(tab_rect(self.side, work, center, scale))
+    }
+}
+
+fn along_axis(side: Side, rect: Rect) -> (i32, i32) {
+    match side {
+        Side::Top => (rect.x, rect.width),
+        _ => (rect.y, rect.height),
+    }
+}
+
+/// Keep the card inside the work area at the current DPI, subject to the
+/// minimum size required by the card's layout.
+pub fn visible_card(work: Rect, position: Option<(i32, i32)>, width: u32, height: u32, scale: f64) -> Rect {
+    let pixels = |logical: u32| (f64::from(logical) * scale).round() as i32;
+    let width = pixels(width.clamp(320, 1100)).min(work.width.max(pixels(320)));
+    let height = pixels(height.clamp(210, 700)).min(work.height.max(pixels(210)));
+    let right = (work.right() - width).max(work.x);
+    let bottom = (work.bottom() - height).max(work.y);
+    let (x, y) = position.unwrap_or((work.x + (right - work.x) / 2, work.y + (bottom - work.y) / 2));
+    Rect { x: x.clamp(work.x, right), y: y.clamp(work.y, bottom), width, height }
 }
 
 /// Managed state: `Some` while the window is folded into a tab.
@@ -139,7 +187,7 @@ impl GeometryDebounce {
 }
 
 /// A rectangle in physical pixels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,
@@ -245,6 +293,33 @@ mod tests {
             width: 760,
             height: 440,
         }
+    }
+
+    #[test]
+    fn dock_restores_a_moved_icon_at_the_new_dpi() {
+        let moved = tab_rect(Side::Right, MONITOR, 700, 1.0);
+        let dock = Dock::from_tab(Side::Right, moved, MONITOR, MONITOR);
+        let tab = dock.restore(MONITOR, MONITOR, 2.0).unwrap();
+        assert_eq!((tab.width, tab.height, tab.right(), along_center(Side::Right, tab)), (64, 64, 1920, 700));
+    }
+
+    #[test]
+    fn missing_display_rejects_dock_and_card_fallback_is_visible() {
+        let secondary = Rect { x: -1920, ..MONITOR };
+        let dock = Dock::from_tab(Side::Left, tab_rect(Side::Left, secondary, 500, 1.0), secondary, secondary);
+        assert_eq!(dock.restore(MONITOR, MONITOR, 1.0), None);
+        let work = Rect { height: 1040, ..MONITOR };
+        let card = visible_card(work, None, 471, 323, 2.0);
+        assert_eq!((card.width, card.height), (942, 646));
+        assert!(card.x >= work.x && card.right() <= work.right());
+        assert!(card.y >= work.y && card.bottom() <= work.bottom());
+    }
+
+    #[test]
+    fn saved_card_near_corner_is_clamped_to_the_work_area() {
+        let work = Rect { x: -1600, y: 40, width: 1600, height: 860 };
+        let card = visible_card(work, Some((-1, 899)), 1100, 700, 2.0);
+        assert_eq!(card, work);
     }
 
     #[test]

@@ -6,12 +6,12 @@ import { useEdgeMode } from './composables/useEdgeMode'
 // Folding is decided in Rust (it owns the monitor geometry); the frontend only
 // mirrors the state. The card stays mounted so its last detection survives a
 // fold/unfold cycle instead of re-running a network request every time.
-const { parked, side, expand, readTab, moveTab } = useEdgeMode()
+const { parked, side, expand, readTab, moveTab, saveTab } = useEdgeMode()
 </script>
 
 <template>
   <main class="stage" :class="{ 'stage--parked': parked }">
-    <EdgeTab class="stage__tab" :side="side" :read-tab="readTab" :move-tab="moveTab" @expand="expand" />
+    <EdgeTab class="stage__tab" :side="side" :read-tab="readTab" :move-tab="moveTab" :save-tab="saveTab" @expand="expand" />
     <div class="stage__card">
       <IpCard />
     </div>

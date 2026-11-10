@@ -6,6 +6,7 @@ const props = defineProps<{
   side: EdgeSide | null
   readTab: () => Promise<EdgeSnapshot | null>
   moveTab: (tab: EdgeSnapshot, delta: number) => Promise<void>
+  saveTab: (tab: EdgeSnapshot) => Promise<void>
 }>()
 const emit = defineEmits<{ expand: [] }>()
 
@@ -62,16 +63,26 @@ function move(event: PointerEvent): void {
   })
 }
 
+function finishDrag(current: Gesture): void {
+  if (!current.dragged) return
+  queue = queue.then(async () => {
+    const tab = await current.origin
+    if (tab) await props.saveTab(tab)
+  }).catch((error) => console.error('edge: could not save folded icon position', error))
+}
+
 function release(event: PointerEvent): void {
   if (gesture?.id !== event.pointerId) return
   move(event)
   suppressClick = gesture.dragged
+  finishDrag(gesture)
   gesture = undefined
 }
 
 function cancel(event: PointerEvent): void {
   if (gesture?.id !== event.pointerId) return
   gesture.cancelled = true
+  finishDrag(gesture)
   suppressClick = true
   gesture = undefined
 }

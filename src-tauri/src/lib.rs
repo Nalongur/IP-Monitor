@@ -33,8 +33,17 @@ fn show_card(app: &AppHandle) {
     };
     // Showing a parked tab means unfolding it first, otherwise the user gets an
     // unclickable sliver and has to guess.
-    expand_from_edge(app, &window);
     let _ = window.unminimize();
+    if app.state::<edge::EdgeState>().is_parked() {
+        expand_from_edge(app, &window);
+    } else if let (Some(rect), Ok(monitors)) = (window_rect(&window), window.available_monitors()) {
+        if !monitors.is_empty() && !monitors.iter().any(|m| contains_point(monitor_work_area(m), rect.x, rect.y)) {
+            app.state::<edge::EdgeState>().suppress_for(std::time::Duration::from_millis(1200));
+            let stored = app.state::<SettingsState>().snapshot();
+            restore_geometry(&window, None, stored.window_size);
+            save_card_geometry(app, &window);
+        }
+    }
     let _ = window.show();
     let _ = window.set_focus();
 }
@@ -621,15 +630,7 @@ fn park_if_near_edge(app: &AppHandle, window: &tauri::WebviewWindow, leave_reque
         width: size.width as i32,
         height: size.height as i32,
     };
-    let origin = monitor.position();
-    let extent = monitor.size();
-    let monitor_rect = edge::Rect {
-        x: origin.x,
-        y: origin.y,
-        width: extent.width as i32,
-        height: extent.height as i32,
-    };
-
+    let monitor_rect = monitor_bounds(&monitor);
     let Some(side) = edge::side_for(card, monitor_rect) else {
         state.end_edge_preview();
         return ParkAttempt::Skipped;
@@ -645,25 +646,46 @@ fn park_if_near_edge(app: &AppHandle, window: &tauri::WebviewWindow, leave_reque
     if primary_mouse_down() {
         return ParkAttempt::Deferred;
     }
-    // Relax Tao's minimum before enabling the native square constraint so
-    // the minimum update does not shrink the window at its old origin.
-    let _ = window.set_min_size(Some(tauri::LogicalSize::new(24.0, 24.0)));
-    if !set_frame_constraint(window, tab.width) {
-        let _ = window.set_min_size(Some(tauri::LogicalSize::new(320.0, 210.0)));
+    let parked = edge::Parked { side, tab, width: logical.width, height: logical.height };
+    if !apply_parked(app, window, parked) {
         return ParkAttempt::Skipped;
     }
-    let parked = edge::Parked { side, tab, width: logical.width, height: logical.height };
+    let updated = app.state::<SettingsState>().update(|settings| {
+        settings.window_position = Some(settings::WindowPosition { x: card.x, y: card.y });
+        settings.window_size = Some(settings::WindowSize { width: logical.width, height: logical.height });
+        settings.dock = Some(edge::Dock::from_tab(side, tab, monitor_rect, monitor_work_area(&monitor)));
+    });
+    persist(app, &updated);
+    ParkAttempt::Parked
+}
+
+/// Apply a known tab rectangle, either after a drag or while still hidden
+/// during startup. Only a successful native transition changes saved state.
+fn apply_parked(app: &AppHandle, window: &tauri::WebviewWindow, parked: edge::Parked) -> bool {
+    let Some(card) = window_rect(window) else { return false };
+    let state = app.state::<edge::EdgeState>();
+    let _ = window.set_min_size(Some(tauri::LogicalSize::new(24.0, 24.0)));
+    if !set_frame_constraint(window, parked.tab.width) {
+        clamp_size(window);
+        return false;
+    }
     state.set(Some(parked));
-    if !set_edge_rect(window, tab) {
-        eprintln!("window: could not position folded icon");
+    if !set_edge_rect(window, parked.tab) {
+        set_frame_constraint(window, 0);
+        set_edge_rect(window, card);
+        state.set(None);
+        state.end_edge_preview();
+        state.suppress_for(std::time::Duration::from_millis(1200));
+        clamp_size(window);
+        shape_window(app, window);
+        return false;
     }
     if !app.state::<SettingsState>().snapshot().size_locked {
         let _ = window.set_resizable(false);
     }
-    // State drives the button even if the OS did not apply the requested size.
     let _ = app.emit("edge-state", EdgeSnapshot::tab(parked, state.revision()));
     shape_window(app, window);
-    ParkAttempt::Parked
+    true
 }
 
 /// Unfold the card back to the size and place it had before parking.
@@ -674,7 +696,10 @@ fn expand_from_edge(app: &AppHandle, window: &tauri::WebviewWindow) {
     };
     let opened_under_pointer = window_rect(window).is_some_and(|rect| !cursor_outside(window, rect));
     let Some(monitor) = parked_monitor(window, parked.tab) else { return };
-    let rect = edge::expanded_rect(parked, monitor_work_area(&monitor), monitor.scale_factor());
+    let work = monitor_work_area(&monitor);
+    let scale = monitor.scale_factor();
+    let anchored = edge::expanded_rect(parked, work, scale);
+    let rect = edge::visible_card(work, Some((anchored.x, anchored.y)), parked.width, parked.height, scale);
 
     if !set_frame_constraint(window, 0) {
         return;
@@ -695,7 +720,21 @@ fn expand_from_edge(app: &AppHandle, window: &tauri::WebviewWindow) {
     }
     shape_window(app, window);
     let _ = app.emit("edge-state", EdgeSnapshot::card());
+    save_card_geometry(app, window);
     watch_preview_leave(app, window, opened_under_pointer);
+}
+
+fn monitor_bounds(monitor: &tauri::Monitor) -> edge::Rect {
+    edge::Rect {
+        x: monitor.position().x,
+        y: monitor.position().y,
+        width: monitor.size().width as i32,
+        height: monitor.size().height as i32,
+    }
+}
+
+fn contains_point(rect: edge::Rect, x: i32, y: i32) -> bool {
+    x >= rect.x && x < rect.right() && y >= rect.y && y < rect.bottom()
 }
 
 fn monitor_work_area(monitor: &tauri::Monitor) -> edge::Rect {
@@ -739,9 +778,22 @@ fn move_edge_tab(app: AppHandle, revision: u64, center: i32, delta: f64) {
         if set_edge_rect(&window, tab) {
             state.update_tab(tab);
             shape_window(&app, &window);
+            app.state::<SettingsState>().update(|settings| {
+                settings.dock = Some(edge::Dock::from_tab(
+                    parked.side, tab, monitor_bounds(&monitor), monitor_work_area(&monitor),
+                ));
+            });
         } else {
             set_frame_constraint(&window, parked.tab.width);
         }
+    }
+}
+
+#[tauri::command]
+fn save_edge_tab(app: AppHandle, revision: u64) {
+    let edge = app.state::<edge::EdgeState>();
+    if edge.is_parked() && edge.revision() == revision {
+        persist(&app, &app.state::<SettingsState>().snapshot());
     }
 }
 
@@ -823,47 +875,40 @@ fn clamp_size(window: &tauri::WebviewWindow) {
     }
 }
 
-/// Put the card back where the user left it, if that spot still exists.
-///
-/// A monitor may have been unplugged since the position was saved, so the point
-/// is checked against the monitors that are present now; anything else falls
-/// through to the centring the config asks for.
+/// Restore a card within the saved display's work area, or center it on
+/// the primary display when its original coordinates are no longer visible.
 fn restore_geometry(
     window: &tauri::WebviewWindow,
     saved_position: Option<settings::WindowPosition>,
     saved_size: Option<settings::WindowSize>,
 ) {
-    if let Some(saved) = saved_size {
-        // Clamp to what the user can reach by dragging, so an edited or stale
-        // file cannot produce a card that is invisible or larger than the screen.
-        let width = saved.width.clamp(320, 1100) as f64;
-        let height = saved.height.clamp(210, 700) as f64;
-        if let Err(error) = window.set_size(tauri::LogicalSize::new(width, height)) {
-            eprintln!("window: cannot restore size ({error})");
-        }
+    let size = saved_size.unwrap_or(settings::WindowSize { width: 471, height: 323 });
+    let available = window.available_monitors().unwrap_or_default();
+    let saved_monitor = saved_position.and_then(|saved| {
+        available.iter().find(|m| contains_point(monitor_bounds(m), saved.x, saved.y))
+    });
+    let primary = window.primary_monitor().ok().flatten();
+    let Some(monitor) = saved_monitor.or(primary.as_ref()).or(available.first()) else { return };
+    let position = saved_position.filter(|_| saved_monitor.is_some()).map(|saved| (saved.x, saved.y));
+    let rect = edge::visible_card(monitor_work_area(monitor), position, size.width, size.height, monitor.scale_factor());
+    if !set_edge_rect(window, rect) {
+        eprintln!("window: could not apply the restored card geometry");
     }
+}
 
-    let Some(saved) = saved_position else { return };
-    let target = tauri::PhysicalPosition::new(saved.x, saved.y);
-
-    if let Ok(monitors) = window.available_monitors() {
-        let visible = monitors.iter().any(|monitor| {
-            let origin = monitor.position();
-            let size = monitor.size();
-            target.x >= origin.x
-                && target.y >= origin.y
-                && target.x < origin.x + size.width as i32
-                && target.y < origin.y + size.height as i32
-        });
-        if !visible {
-            eprintln!("window: saved position is off-screen, ignoring it");
-            return;
-        }
-    }
-
-    if let Err(error) = window.set_position(target) {
-        eprintln!("window: cannot restore position ({error})");
-    }
+fn restore_dock(app: &AppHandle, window: &tauri::WebviewWindow, stored: &Settings, dock: edge::Dock) -> bool {
+    let Some(tab) = window.available_monitors().ok().and_then(|monitors| {
+        monitors.iter().find_map(|monitor| {
+            dock.restore(monitor_bounds(monitor), monitor_work_area(monitor), monitor.scale_factor())
+        })
+    }) else { return false };
+    let size = stored.window_size.unwrap_or(settings::WindowSize { width: 471, height: 323 });
+    apply_parked(app, window, edge::Parked {
+        side: dock.side,
+        tab,
+        width: size.width.clamp(320, 1100),
+        height: size.height.clamp(210, 700),
+    })
 }
 
 #[cfg(target_os = "windows")]
@@ -966,27 +1011,32 @@ fn settle_geometry(
         return retry;
     }
 
+    save_card_geometry(app, window);
+    false
+}
+
+fn save_card_geometry(app: &AppHandle, window: &tauri::WebviewWindow) {
     let (Ok(scale), Ok(position), Ok(size)) =
         (window.scale_factor(), window.outer_position(), window.outer_size())
     else {
-        return false;
+        return;
     };
     let logical = size.to_logical::<u32>(scale);
     // Never persist the tab or a minimised window as the restored size.
     if logical.width < 320 || logical.height < 210 {
-        return false;
+        return;
     }
     let Some(state) = app.try_state::<SettingsState>() else {
-        return false;
+        return;
     };
     let updated = state.update(|settings| {
+        settings.dock = None;
         settings.window_position = Some(settings::WindowPosition { x: position.x, y: position.y });
         settings.window_size = Some(settings::WindowSize { width: logical.width, height: logical.height });
     });
     if let Err(error) = settings::save(app, &updated) {
         eprintln!("settings: cannot persist window geometry ({error})");
     }
-    false
 }
 
 
@@ -1015,6 +1065,7 @@ pub fn run() {
             save_custom_proxy,
             get_edge_state,
             move_edge_tab,
+            save_edge_tab,
             expand_edge
         ])
         .setup(|app| {
@@ -1054,8 +1105,17 @@ pub fn run() {
                         app.state::<SettingsState>().update(|s| s.size_locked = false);
                     }
                 }
-                let _ = window.show();
+                if let Some(dock) = stored.dock {
+                    if !restore_dock(&handle, &window, &stored, dock) {
+                        // An unplugged display must not leave a hidden tab or
+                        // resurrect it on a later restart after fallback.
+                        let updated = app.state::<SettingsState>().update(|settings| settings.dock = None);
+                        persist(&handle, &updated);
+                        save_card_geometry(&handle, &window);
+                    }
+                }
                 shape_window(&handle, &window);
+                let _ = window.show();
                 watch_geometry(&handle, &window);
             }
             Ok(())
