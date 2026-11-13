@@ -6,11 +6,11 @@ import { useEdgeMode } from './composables/useEdgeMode'
 // Folding is decided in Rust (it owns the monitor geometry); the frontend only
 // mirrors the state. The card stays mounted so its last detection survives a
 // fold/unfold cycle instead of re-running a network request every time.
-const { parked, side, expand, readTab, moveTab, saveTab } = useEdgeMode()
+const { parked, side, motionSide, expand, readTab, moveTab, saveTab } = useEdgeMode()
 </script>
 
 <template>
-  <main class="stage" :class="{ 'stage--parked': parked }">
+  <main class="stage" :class="{ 'stage--parked': parked }" :data-motion-edge="motionSide">
     <EdgeTab class="stage__tab" :side="side" :read-tab="readTab" :move-tab="moveTab" :save-tab="saveTab" @expand="expand" />
     <div class="stage__card">
       <IpCard />
@@ -49,14 +49,26 @@ const { parked, side, expand, readTab, moveTab, saveTab } = useEdgeMode()
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .stage__card,
+  .stage[data-motion-edge='left'] { --edge-x: -9px; }
+  .stage[data-motion-edge='right'] { --edge-x: 9px; }
+  .stage[data-motion-edge='top'] { --edge-y: -9px; }
+
+  .stage[data-motion-edge] .stage__card {
+    animation: reveal-card 210ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
   .stage__tab {
-    animation: reveal-face 260ms cubic-bezier(0.2, 0.65, 0.3, 1);
+    animation: reveal-tab 155ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 }
 
-@keyframes reveal-face {
-  from { opacity: 0.88; }
-  to { opacity: 1; }
+@keyframes reveal-card {
+  from { opacity: 0.92; transform: translate(var(--edge-x, 0px), var(--edge-y, 0px)); }
+  to { opacity: 1; transform: translate(0, 0); }
+}
+
+@keyframes reveal-tab {
+  from { opacity: 0.82; scale: 0.88; }
+  to { opacity: 1; scale: 1; }
 }
 </style>

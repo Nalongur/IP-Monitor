@@ -35,7 +35,7 @@ fn show_card(app: &AppHandle) {
     // unclickable sliver and has to guess.
     let _ = window.unminimize();
     if app.state::<edge::EdgeState>().is_parked() {
-        expand_from_edge(app, &window);
+        expand_from_edge(app, &window, true);
     } else if let (Some(rect), Ok(monitors)) = (window_rect(&window), window.available_monitors()) {
         if !monitors.is_empty() && !monitors.iter().any(|m| contains_point(monitor_work_area(m), rect.x, rect.y)) {
             app.state::<edge::EdgeState>().suppress_for(std::time::Duration::from_millis(1200));
@@ -51,6 +51,20 @@ fn show_card(app: &AppHandle) {
 fn persist(app: &AppHandle, settings: &Settings) {
     if let Err(error) = settings::save(app, settings) {
         eprintln!("settings: cannot persist ({error})");
+    }
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AppSettingsView {
+    pinned: bool,
+    size_locked: bool,
+    theme: Theme,
+}
+
+impl From<&Settings> for AppSettingsView {
+    fn from(settings: &Settings) -> Self {
+        Self { pinned: settings.pinned, size_locked: settings.size_locked, theme: settings.theme }
     }
 }
 
@@ -70,7 +84,7 @@ fn apply_pin(app: &AppHandle, pinned: bool) -> bool {
     let effective = window.is_always_on_top().unwrap_or(pinned);
     let updated = app.state::<SettingsState>().update(|s| s.pinned = effective);
     persist(app, &updated);
-    let _ = app.emit("settings-changed", &updated);
+    let _ = app.emit("settings-changed", AppSettingsView::from(&updated));
 
     if let Some(handles) = app.try_state::<TrayHandles>() {
         let _ = handles.pin_item.set_checked(effective);
@@ -122,8 +136,8 @@ fn build_tray(app: &AppHandle, pinned: bool) -> tauri::Result<()> {
 }
 
 #[tauri::command]
-fn get_settings(state: tauri::State<'_, SettingsState>) -> Settings {
-    state.snapshot()
+fn get_settings(state: tauri::State<'_, SettingsState>) -> AppSettingsView {
+    AppSettingsView::from(&state.snapshot())
 }
 
 #[tauri::command]
@@ -148,20 +162,21 @@ fn set_size_locked(app: AppHandle, locked: bool) -> Result<bool, String> {
         return Err(error.to_string());
     }
     let updated = state.update(|settings| settings.size_locked = locked);
-    let _ = app.emit("settings-changed", &updated);
+    let _ = app.emit("settings-changed", AppSettingsView::from(&updated));
     Ok(locked)
 }
 
 #[tauri::command]
-fn set_theme(app: AppHandle, theme: Theme) -> Settings {
+fn set_theme(app: AppHandle, theme: Theme) -> AppSettingsView {
     let updated = app.state::<SettingsState>().update(|s| s.theme = theme);
     persist(&app, &updated);
-    let _ = app.emit("settings-changed", &updated);
-    updated
+    let view = AppSettingsView::from(&updated);
+    let _ = app.emit("settings-changed", &view);
+    view
 }
 
-/// Launch-at-login lives in the OS (the Run key), never in settings.json:
-/// the registry is the only honest source of truth for it.
+/// Report the Windows registration. Settings only track whether the initial
+/// default has already been applied, so we respect later opt-outs.
 #[tauri::command]
 fn get_autostart(app: AppHandle) -> bool {
     app.autolaunch().is_enabled().unwrap_or(false)
@@ -177,9 +192,12 @@ fn set_autostart(app: AppHandle, enabled: bool) -> bool {
     };
     if let Err(error) = outcome {
         eprintln!("autostart: cannot change ({error})");
+        return manager.is_enabled().unwrap_or(!enabled);
     }
-    // Report what the OS actually says, including after a failed write.
-    manager.is_enabled().unwrap_or(!enabled)
+    let effective = manager.is_enabled().unwrap_or(enabled);
+    let updated = app.state::<SettingsState>().update(|settings| settings.autostart = Some(effective));
+    persist(&app, &updated);
+    effective
 }
 
 /// Whether to ask the compositor for a material behind the card.
@@ -496,16 +514,24 @@ fn validate_custom_proxy(config: CustomProxyConfig) -> Result<(), DetectionError
 #[tauri::command]
 fn save_custom_proxy(
     app: AppHandle,
-    config: CustomProxyConfig,
+    mut config: CustomProxyConfig,
 ) -> Result<CustomProxyView, DetectionError> {
+    let previous = app.state::<SettingsState>().snapshot().custom_proxy;
+    let same_proxy = previous.as_ref().filter(|saved| {
+        saved.protocol == config.protocol && saved.host == config.host.trim()
+            && saved.port == config.port && saved.username == config.username
+    });
+    if config.username.is_some() && config.password.as_deref().unwrap_or("").is_empty() {
+        config.password = same_proxy.and_then(|saved| saved.password_blob.as_deref())
+            .and_then(secret::unprotect);
+        if config.password.is_none() {
+            return Err(DetectionError::new("invalid", "请填写当前代理的密码"));
+        }
+    }
     config
         .validate()
         .map_err(|error| DetectionError::new("invalid", error.to_string()))?;
 
-    let previous = app.state::<SettingsState>().snapshot().custom_proxy;
-
-    // Empty password means "keep the one already stored": the form never shows
-    // the old password back, so requiring a retype on every edit would be hostile.
     let password_blob = match config.password.as_deref() {
         Some(password) if !password.is_empty() => match secret::protect(password) {
             Some(blob) => Some(blob),
@@ -516,15 +542,8 @@ fn save_custom_proxy(
                 ))
             }
         },
-        _ => previous.as_ref().and_then(|settings| settings.password_blob.clone()),
+        _ => None,
     };
-
-    if config.username.is_some() && password_blob.is_none() {
-        return Err(DetectionError::new(
-            "invalid",
-            "这个代理需要密码：请填写密码后再保存",
-        ));
-    }
 
     let stored = CustomProxySettings {
         protocol: config.protocol,
@@ -537,7 +556,6 @@ fn save_custom_proxy(
         .state::<SettingsState>()
         .update(|settings| settings.custom_proxy = Some(stored.clone()));
     persist(&app, &updated);
-    let _ = app.emit("settings-changed", &updated);
 
     Ok(CustomProxyView::from_settings(stored))
 }
@@ -689,7 +707,7 @@ fn apply_parked(app: &AppHandle, window: &tauri::WebviewWindow, parked: edge::Pa
 }
 
 /// Unfold the card back to the size and place it had before parking.
-fn expand_from_edge(app: &AppHandle, window: &tauri::WebviewWindow) {
+fn expand_from_edge(app: &AppHandle, window: &tauri::WebviewWindow, preview: bool) {
     let state = app.state::<edge::EdgeState>();
     let Some(parked) = state.parked() else {
         return;
@@ -721,7 +739,12 @@ fn expand_from_edge(app: &AppHandle, window: &tauri::WebviewWindow) {
     shape_window(app, window);
     let _ = app.emit("edge-state", EdgeSnapshot::card());
     save_card_geometry(app, window);
-    watch_preview_leave(app, window, opened_under_pointer);
+    if preview {
+        watch_preview_leave(app, window, opened_under_pointer);
+    } else {
+        state.end_edge_preview();
+        let _ = window.show();
+    }
 }
 
 fn monitor_bounds(monitor: &tauri::Monitor) -> edge::Rect {
@@ -852,9 +875,9 @@ fn watch_preview_leave(app: &AppHandle, window: &tauri::WebviewWindow, opened_un
 }
 
 #[tauri::command]
-fn expand_edge(app: AppHandle) {
+fn expand_edge(app: AppHandle, automatic: Option<bool>) {
     if let Some(window) = app.get_webview_window("main") {
-        expand_from_edge(&app, &window);
+        expand_from_edge(&app, &window, !automatic.unwrap_or(false));
     }
 }
 
@@ -1074,6 +1097,9 @@ pub fn run() {
             app.manage(SettingsState::new(stored.clone()));
             app.manage(DetectionState::default());
             app.manage(edge::EdgeState::default());
+            if stored.autostart.is_none() {
+                set_autostart(handle.clone(), true);
+            }
 
             if let Some(window) = app.get_webview_window("main") {
                 if let Err(error) = window.set_always_on_top(stored.pinned) {

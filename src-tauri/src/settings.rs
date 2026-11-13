@@ -35,6 +35,8 @@ pub enum Theme {
 pub struct Settings {
     pub pinned: bool,
     pub size_locked: bool,
+    /// None marks a profile whose launch-at-login default has not been applied.
+    pub autostart: Option<bool>,
     pub theme: Theme,
     /// Non-secret half of the custom proxy (spec §6.3). The password is never
     /// written here — it only lives in memory for the session (spec §10.2).
@@ -72,6 +74,7 @@ impl Default for Settings {
         Self {
             pinned: true,
             size_locked: false,
+            autostart: None,
             theme: Theme::Lime,
             custom_proxy: None,
             window_position: None,
@@ -137,8 +140,9 @@ pub fn load<R: Runtime>(app: &AppHandle<R>) -> Settings {
         eprintln!("settings: no config directory, starting from defaults");
         return Settings::default();
     };
-    let Ok(raw) = fs::read_to_string(&path) else {
-        return Settings::default();
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(_) => return Settings::default(),
     };
     serde_json::from_str(&raw).unwrap_or_else(|error| {
         eprintln!(

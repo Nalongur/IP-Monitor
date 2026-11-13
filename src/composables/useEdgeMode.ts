@@ -22,10 +22,12 @@ export interface EdgeSnapshot {
 export function useEdgeMode() {
   const parked = ref(false)
   const side = ref<EdgeSide | null>(null)
+  const motionSide = ref<EdgeSide | null>(null)
   let unlisten: UnlistenFn | null = null
   let active = true
 
   function apply(snapshot: EdgeSnapshot): void {
+    if (snapshot.side) motionSide.value = snapshot.side
     parked.value = snapshot.parked
     side.value = snapshot.side
   }
@@ -73,5 +75,5 @@ export function useEdgeMode() {
     unlisten?.()
   })
 
-  return { parked, side, expand, readTab, moveTab, saveTab }
+  return { parked, side, motionSide, expand, readTab, moveTab, saveTab }
 }

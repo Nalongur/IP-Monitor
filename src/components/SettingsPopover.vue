@@ -22,8 +22,8 @@ const OPTIONS: ReadonlyArray<{ value: AccentTheme; label: string; color: string 
 ]
 
 /** Launch-at-login is owned by the OS (Run key), so it is queried, not cached. */
-const autostart = ref(false)
-const autostartPending = ref(false)
+const autostart = ref(!isTauri())
+const autostartPending = ref(isTauri())
 
 onMounted(async () => {
   if (!isTauri()) return
@@ -31,6 +31,8 @@ onMounted(async () => {
     autostart.value = await invoke<boolean>('get_autostart')
   } catch (error) {
     console.error('settings: cannot read autostart state', error)
+  } finally {
+    autostartPending.value = false
   }
 })
 

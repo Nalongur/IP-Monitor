@@ -24,6 +24,13 @@ const password = ref('')
 const busy = ref(false)
 const error = ref<string | null>(null)
 
+const canKeepPassword = computed(() => {
+  const saved = props.initial
+  return Boolean(saved?.hasPassword && saved.protocol === protocol.value
+    && saved.host === host.value.trim() && saved.port === Number(port.value)
+    && saved.username === username.value.trim())
+})
+
 const endpointHint = computed(() => {
   const trimmed = host.value.trim()
   if (!trimmed) return 'host:port'
@@ -40,7 +47,7 @@ function payload(): CustomProxyConfig | null {
   const user = username.value.trim()
   // An empty field means "keep the stored password" — the backend still has the
   // DPAPI blob, and the form never shows the old secret back.
-  if (user && !password.value && !props.initial?.hasPassword) {
+  if (user && !password.value && !canKeepPassword.value) {
     error.value = '填写了用户名就要填一次密码'
     return null
   }
@@ -120,7 +127,7 @@ onMounted(() => {
           class="proxy__control"
           type="password"
           autocomplete="off"
-          :placeholder="initial?.hasPassword ? '留空即保持原密码' : ''"
+          :placeholder="canKeepPassword ? '留空即保持原密码' : ''"
         />
       </label>
     </div>

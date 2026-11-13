@@ -141,7 +141,9 @@ fn proxy_route(proxy: &ResolvedProxy) -> String {
 fn build_client(proxy: &ResolvedProxy) -> Result<reqwest::Client, DetectionError> {
     let mut builder = reqwest::Client::builder()
         .timeout(REQUEST_TIMEOUT)
-        .user_agent("IP-Monitor/0.1 (+tauri)");
+        .https_only(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("IP-Monitor/", env!("CARGO_PKG_VERSION"), " (+tauri)"));
 
     builder = match proxy {
         // `no_proxy()` also disables the automatic discovery reqwest would
@@ -229,20 +231,34 @@ pub fn parse_ip_info(body: &str) -> Result<IpInfo, DetectionError> {
 /// The message is kept alongside the status: "Error" alone tells the user
 /// nothing about whether the proxy refused the connection or the service is
 /// down, and spec §6.3 requires the failure reason to be visible.
+fn normalize_address(address: Option<&str>, ipv4: bool) -> Option<String> {
+    address?
+        .parse::<std::net::IpAddr>()
+        .ok()
+        .filter(|ip| ip.is_ipv4() == ipv4)
+        .map(|ip| ip.to_string())
+}
+
 async fn lookup(client: &reqwest::Client, url: &'static str, proxy_used: bool) -> (Option<IpInfo>, FieldStatus, Option<String>) {
     let mut last = FieldStatus::Error;
     let mut message: Option<String> = None;
 
     for attempt in 0..2 {
         let outcome = match client.get(url).send().await {
+            Ok(response) if response.status().is_redirection() => {
+                (None, FieldStatus::Error, Some("detection endpoint returned a redirect".into()))
+            }
             Ok(response) => match response.error_for_status() {
                 Ok(response) => match response.text().await {
                     Ok(body) => match parse_ip_info(&body) {
-                        Ok(info) if info.ip.is_some() => {
-                            return (Some(info), FieldStatus::Success, None)
+                        Ok(mut info) => {
+                            let ip = normalize_address(info.ip.as_deref(), url == IPV4_ENDPOINT);
+                            if let Some(ip) = ip {
+                                info.ip = Some(ip.to_string());
+                                return (Some(info), FieldStatus::Success, None);
+                            }
+                            (None, FieldStatus::Error, Some("response had no valid address for this IP family".into()))
                         }
-                        // A 200 with no address is not a usable answer.
-                        Ok(_) => (None, FieldStatus::Error, Some("response had no address".into())),
                         Err(error) => (None, FieldStatus::Error, Some(format!("unreadable response: {}", error.message))),
                     },
                     Err(error) => (None, FieldStatus::from_error(&error), Some(FieldStatus::reason(&error, proxy_used))),
@@ -358,6 +374,15 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_addresses_of_the_requested_family_are_accepted() {
+        assert_eq!(normalize_address(Some("192.0.2.42"), true).as_deref(), Some("192.0.2.42"));
+        assert_eq!(normalize_address(Some("2001:0DB8:0:0::42"), false).as_deref(), Some("2001:db8::42"));
+        assert!(normalize_address(Some("192.0.2.42"), false).is_none());
+        assert!(normalize_address(Some("2001:db8::42"), true).is_none());
+        assert!(normalize_address(Some("unknown"), true).is_none());
+    }
 
     #[test]
     fn proxy_diagnostics_never_expose_url_userinfo() {

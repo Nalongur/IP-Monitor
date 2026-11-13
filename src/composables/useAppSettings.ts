@@ -43,11 +43,15 @@ export async function initAppSettings(): Promise<void> {
   applyTheme(settings.value.theme)
 
   if (bridgeBound) return
-  bridgeBound = true
-  await listen<AppSettings>('settings-changed', (event) => {
-    settings.value = event.payload
-    applyTheme(event.payload.theme)
-  })
+  try {
+    await listen<AppSettings>('settings-changed', (event) => {
+      settings.value = event.payload
+      applyTheme(event.payload.theme)
+    })
+    bridgeBound = true
+  } catch (error) {
+    console.error('settings: cannot subscribe to changes', error)
+  }
 }
 
 async function togglePin(): Promise<void> {

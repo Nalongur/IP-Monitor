@@ -64,7 +64,7 @@ impl CustomProxyConfig {
         // Hostname or IP literal only: no scheme, no path, no userinfo. A
         // pasted "http://user:pass@host:8080" must be rejected rather than
         // half-understood.
-        if host.contains("://") || host.contains('/') || host.contains('@') || host.contains(' ') {
+        if host.chars().any(|c| c.is_whitespace() || c.is_control() || "/\\@?#%".contains(c)) {
             return Err(ProxyError::Invalid(
                 "host must be a name or an IP address, without scheme or credentials".into(),
             ));
@@ -75,8 +75,14 @@ impl CustomProxyConfig {
         // A colon is legal in an IPv6 literal and illegal anywhere else, so the
         // only thing that may contain one is a literal that parses as IPv6.
         // "127.0.0.1:8080" pasted into the host field is a port, not a host.
-        let bare = host.trim_start_matches('[').trim_end_matches(']');
-        if bare.contains(':') && bare.parse::<std::net::Ipv6Addr>().is_err() {
+        let bare = host.strip_prefix('[').and_then(|host| host.strip_suffix(']')).unwrap_or(host);
+        let valid_host = if host.contains([':', '[', ']']) {
+            bare.parse::<std::net::Ipv6Addr>().is_ok()
+        } else {
+            reqwest::Url::parse(&format!("http://{host}"))
+                .is_ok_and(|url| url.has_host() && url.port().is_none())
+        };
+        if !valid_host {
             return Err(ProxyError::Invalid(
                 "host must not include a port; fill the port field instead".into(),
             ));
@@ -225,6 +231,9 @@ mod windows_impl {
 
             let auto_config = take_wide_string(config.lpszAutoConfigUrl);
             let proxy_server = take_wide_string(config.lpszProxy);
+            // The configured mode intentionally routes every detection through
+            // the proxy, but WinHTTP still transfers ownership of this string.
+            drop(take_wide_string(config.lpszProxyBypass));
             let auto_detect = config.fAutoDetect != 0;
 
             // PAC/WPAD cannot be honoured, and silently going direct would lie
@@ -356,6 +365,9 @@ mod tests {
     fn rejects_hosts_that_carry_credentials_or_scheme() {
         assert!(cfg("http://user:pass@127.0.0.1", 8080).validate().is_err());
         assert!(cfg("127.0.0.1:8080", 8080).validate().is_err());
+        assert!(cfg("proxy.example?x", 8080).validate().is_err());
+        assert!(cfg("proxy.example#x", 8080).validate().is_err());
+        assert!(cfg("proxy.example\\x", 8080).validate().is_err());
         assert!(cfg("", 8080).validate().is_err());
         assert!(cfg("127.0.0.1", 0).validate().is_err());
     }

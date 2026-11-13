@@ -1,10 +1,10 @@
 [package]
 name = "ip-monitor"
-version = "0.2.0"
+version = "0.3.0"
 description = "Floating desktop card for the current public IP information"
 authors = ["IP Monitor"]
 edition = "2021"
-rust-version = "1.77.2"
+rust-version = "1.90"
 
 [lib]
 name = "ip_monitor_lib"

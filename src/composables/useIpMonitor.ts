@@ -186,26 +186,71 @@ export function useIpMonitor(call: typeof invoke = invoke) {
 
   let requestsInFlight = 0
   let autoRefreshTimer: ReturnType<typeof setInterval> | undefined
+  const observed = new Map<DetectionMode, { ipv4?: string; ipv6?: string }>()
+
+  function observe(result: DetectionResult): boolean {
+    const previous = observed.get(result.mode)
+    const ipv4 = result.ipv4Status === 'success' ? result.ipv4?.ip : undefined
+    const ipv6 = result.ipv6Status === 'success' ? result.ipv6 ?? undefined : undefined
+    observed.set(result.mode, { ipv4: ipv4 ?? previous?.ipv4, ipv6: ipv6 ?? previous?.ipv6 })
+    return Boolean(
+      (ipv4 && previous?.ipv4 && ipv4 !== previous.ipv4)
+      || (ipv6 && previous?.ipv6 && ipv6 !== previous.ipv6),
+    )
+  }
+
+  function expandOnChange(): void {
+    void call('expand_edge', { automatic: true }).catch((failure: unknown) => {
+      console.error('edge: cannot expand after IP change', failure)
+    })
+  }
+
+  async function checkOtherModes(selected: DetectionMode, run: number): Promise<void> {
+    requestsInFlight += 1
+    try {
+      const results = await Promise.allSettled(
+        MODE_OPTIONS.filter(option => option.value !== selected)
+          .map(option => call<DetectionResult>('get_ip_info', { mode: option.value })),
+      )
+      if (run !== runId) return
+      let changed = false
+      for (const result of results) {
+        if (result.status === 'fulfilled' && observe(result.value)) changed = true
+      }
+      if (changed) expandOnChange()
+    } finally {
+      requestsInFlight -= 1
+    }
+  }
 
   function startAutoRefresh(): void {
     if (autoRefreshTimer !== undefined) return
+    void runDetection(true)
     autoRefreshTimer = setInterval(() => {
-      if (!isLoading.value && requestsInFlight === 0) void refresh()
+      if (!isLoading.value && requestsInFlight === 0) void runDetection(true)
     }, 120_000)
   }
 
   onScopeDispose(() => {
+    ++runId
     if (autoRefreshTimer !== undefined) clearInterval(autoRefreshTimer)
+    if (copyTimer !== null) clearTimeout(copyTimer)
   })
 
-  async function refresh(): Promise<void> {
+  function refresh(): Promise<void> {
+    return runDetection(false)
+  }
+
+  async function runDetection(scheduled: boolean): Promise<void> {
     const currentRun = ++runId
+    const selected = mode.value
     isLoading.value = true
     error.value = null
     requestsInFlight += 1
+    if (scheduled) void checkOtherModes(selected, currentRun)
 
     try {
-      const next = await call<DetectionResult>('get_ip_info', { mode: mode.value })
+      const next = await call<DetectionResult>('get_ip_info', { mode: selected })
       if (currentRun !== runId) return
 
       const failedRun = next.ipv4Status !== 'success' && next.ipv6Status !== 'success'
@@ -219,6 +264,8 @@ export function useIpMonitor(call: typeof invoke = invoke) {
       } else {
         result.value = next
       }
+
+      if (observe(next)) expandOnChange()
     } catch (failure) {
       if (currentRun !== runId) return
       // Keep whatever we had: an old answer with a visible timestamp beats a

@@ -211,7 +211,6 @@ onBeforeUnmount(unbindMenuDismiss)
  */
 onMounted(() => {
   if (!isTauri()) return
-  void refresh()
   startAutoRefresh()
   void loadCustomProxy()
 })
